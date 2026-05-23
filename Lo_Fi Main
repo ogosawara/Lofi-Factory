@@ -1,0 +1,121 @@
+import os
+import sys
+import glob
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+from google_auth_oauthlib.flow import InstalledAppFlow
+
+# Имя файла секретных ключей от Google Cloud Console
+CLIENT_SECRETS_FILE = "client_secret.json"
+# Область доступа (разрешение на управление видео)
+SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+
+def get_latest_video(folder_path):
+    """Automatically searches for the most recent MP4 video in the folder."""
+    search_path = os.path.join(folder_path, "*.mp4")
+    video_files = glob.glob(search_path)
+    
+    if not video_files:
+        return None
+        
+    latest_video = max(video_files, key=os.path.getmtime)
+    return latest_video
+
+def get_youtube_service():
+    """Handles Google OAuth2 authentication and returns a YouTube service object."""
+    if not os.path.exists(CLIENT_SECRETS_FILE):
+        print(f"[Error] Authentication file '{CLIENT_SECRETS_FILE}' not found!")
+        print("[Factory] Please place your Google OAuth credentials JSON file in the project root.")
+        sys.exit(1)
+        
+    flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRETS_FILE, SCOPES)
+    # Запускает локальный сервер для авторизации через браузер
+    credentials = flow.run_local_server(port=0)
+    return build("youtube", "v3", credentials=credentials)
+
+def upload_video(service, file_path, title, description, tags):
+    """Performs the actual heavy media upload to YouTube via API."""
+    body = {
+        "snippet": {
+            "title": title,
+            "description": description,
+            "tags": tags,
+            "categoryId": "10"  # ID категории 'Music'
+        },
+        "status": {
+            "privacyStatus": "public"  # Видео сразу станет публичным ('private' или 'unlisted' для теста)
+        }
+    }
+
+    # Настройка потоковой загрузки (chunksize -1 означает загрузку одним куском, 
+    # либо можно выставить 1024*1024 для больших файлов)
+    media = MediaFileUpload(file_path, chunksize=-1, resumable=True)
+
+    request = service.videos().insert(
+        part="snippet,status",
+        body=body,
+        media_body=media
+    )
+
+    print("[YouTube] Uploading heavy media stream (FullHD 1080p)... Please wait.")
+    
+    # Запуск процесса загрузки с выводом прогресса
+    response = None
+    while response is None:
+        status, response = request.next_chunk()
+        if status:
+            print(f"[YouTube] Upload progress: {int(status.progress() * 100)}%")
+            
+    print(f"[Success] Video successfully uploaded! Video ID: {response['id']}")
+
+def main():
+    print("[Factory] Starting Lofi Factory automation pipeline...")
+    
+    target_folder = "output_videos"
+    out_mp4 = get_latest_video(target_folder)
+    
+    if not out_mp4:
+        print(f"[Error] No MP4 video files found inside '{target_folder}' folder.")
+        sys.exit(1)
+        
+    print(f"[Factory] Successfully detected the latest video: {out_mp4}")
+
+    title = "Lofi Night Moods - Chill Beats to Study / Code / Relax (Vol. 1)"
+    
+    full_desc = (
+        "🌌 Welcome to Lofi Factory. Immerse yourself in the ultimate late-night chill.\n"
+        "The perfect ambient soundtrack for coding, studying, working, or deep relaxation.\n\n"
+        "Tracklist:\n"
+        "00:00 - Midnight Pocket Tape 2\n"
+        "02:33 - Midnight Pocket Tape\n"
+        "05:42 - Paper Lantern Replay 2\n"
+        "09:01 - Paper Lantern Replay\n"
+        "13:09 - Rain on Wool\n\n"
+        "🎵 All music generated and assembled via Lofi Factory automation script.\n"
+        "Visuals: Loop animation with gentle camera shake effect.\n\n"
+        "🔔 Subscribe for more weekly chill compilations!\n\n"
+        "#lofi #lofichill #musicforstudying #codingmusic #lofifactory #chillbeats"
+    )
+    
+    tags = [
+        "lofi", "lofi hip hop", "lofi chill", "music for study", 
+        "coding music", "relaxing beats", "lofi factory", "chillhop"
+    ]
+
+    print("[YouTube] Initializing Google API OAuth authentication...")
+    try:
+        yt_service = get_youtube_service() 
+    except Exception as e:
+        print(f"[Error] YouTube Authentication failed: {e}")
+        sys.exit(1)
+
+    print(f"[YouTube] Preparing to upload: {title}")
+    
+    try:
+        upload_video(yt_service, out_mp4, title, full_desc, tags)
+        print("[Success] Video pipeline finished! Your video is now live on YouTube.")
+    except Exception as e:
+        print(f"[Error] Upload process failed unexpectedly: {e}")
+
+if __name__ == "__main__":
+    main()
